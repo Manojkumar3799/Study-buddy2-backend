@@ -57,8 +57,9 @@ async def ask_question(document_id: str, request: AskRequest) -> AskResponse:
     """
     Answer a question using only the content of a previously stored document.
 
-    Non-streaming variant: waits for the full answer before responding.
-    Useful for testing/debugging; the frontend should use /ask/{document_id}/stream.
+    The LLM is always called (no retrieval-based short-circuit). A strict
+    system prompt enforces that the model only answers from the provided
+    context and returns the fixed refusal sentence otherwise.
 
     Args:
         document_id: Unique identifier of a previously stored document.
@@ -78,20 +79,17 @@ async def ask_question(document_id: str, request: AskRequest) -> AskResponse:
         top_k=top_k,
         similarity_threshold=threshold,
     )
+    has_sufficient_context = bool(retrieved)
 
-    if not retrieved:
-        logger.info(f"No sufficient context found for document_id={document_id}; skipping LLM call")
-        return AskResponse(
-            document_id=document_id,
-            question=request.question,
-            answer=NO_CONTEXT_MESSAGE,
-            provider_used=None,
-            sources=[],
-            has_sufficient_context=False,
-        )
+    llm_context = retrieved or retrieve_relevant_chunks(
+        document_id=document_id,
+        question=request.question,
+        top_k=top_k,
+        apply_threshold=False,
+    )
 
     context_chunks = [
-        {"text": c.text, "start_page": c.start_page, "end_page": c.end_page} for c in retrieved
+        {"text": c.text, "start_page": c.start_page, "end_page": c.end_page} for c in llm_context
     ]
     messages = build_rag_prompt(request.question, context_chunks)
 
@@ -105,13 +103,13 @@ async def ask_question(document_id: str, request: AskRequest) -> AskResponse:
             end_page=c.end_page,
             score=c.score,
         )
-        for c in retrieved
+        for c in llm_context
     ]
 
     ask_elapsed = time.perf_counter() - ask_start
     logger.info(
         f"Ask complete: document_id={document_id}, provider={provider_used}, "
-        f"time={ask_elapsed:.3f}s"
+        f"has_sufficient_context={has_sufficient_context}, time={ask_elapsed:.3f}s"
     )
 
     return AskResponse(
@@ -120,7 +118,7 @@ async def ask_question(document_id: str, request: AskRequest) -> AskResponse:
         answer=answer,
         provider_used=provider_used,
         sources=sources,
-        has_sufficient_context=True,
+        has_sufficient_context=has_sufficient_context,
     )
 
 
@@ -134,7 +132,7 @@ async def ask_question(document_id: str, request: AskRequest) -> AskResponse:
 async def ask_question_stream(document_id: str, request: AskRequest) -> StreamingResponse:
     """
     Answer a question with the response streamed token-by-token as it is
-    generated, ChatGPT-style.
+    generated, ChatGPT-style. The LLM is always called.
 
     The stream emits newline-delimited JSON events:
     - {"type": "sources", "sources": [...], "has_sufficient_context": bool}
@@ -156,14 +154,19 @@ async def ask_question_stream(document_id: str, request: AskRequest) -> Streamin
 
     top_k, threshold = _resolve_retrieval_params(request)
 
-    # Retrieval happens before streaming starts, so a 404 (bad document_id)
-    # still surfaces as a normal HTTP error rather than being swallowed
-    # inside the stream.
     retrieved = retrieve_relevant_chunks(
         document_id=document_id,
         question=request.question,
         top_k=top_k,
         similarity_threshold=threshold,
+    )
+    has_sufficient_context = bool(retrieved)
+
+    llm_context = retrieved or retrieve_relevant_chunks(
+        document_id=document_id,
+        question=request.question,
+        top_k=top_k,
+        apply_threshold=False,
     )
 
     sources_payload = [
@@ -174,7 +177,7 @@ async def ask_question_stream(document_id: str, request: AskRequest) -> Streamin
             "end_page": c.end_page,
             "score": c.score,
         }
-        for c in retrieved
+        for c in llm_context
     ]
 
     async def event_generator():
@@ -186,22 +189,12 @@ async def ask_question_stream(document_id: str, request: AskRequest) -> Streamin
             {
                 "type": "sources",
                 "sources": sources_payload,
-                "has_sufficient_context": bool(retrieved),
+                "has_sufficient_context": has_sufficient_context,
             }
         ) + "\n"
 
-        if not retrieved:
-            logger.info(
-                f"No sufficient context found for document_id={document_id}; skipping LLM call"
-            )
-            yield json.dumps({"type": "token", "content": NO_CONTEXT_MESSAGE}) + "\n"
-            yield json.dumps({"type": "done", "provider_used": None}) + "\n"
-            stream_elapsed = time.perf_counter() - stream_start
-            logger.info(f"Stream ended: document_id={document_id}, time={stream_elapsed:.3f}s")
-            return
-
         context_chunks = [
-            {"text": c.text, "start_page": c.start_page, "end_page": c.end_page} for c in retrieved
+            {"text": c.text, "start_page": c.start_page, "end_page": c.end_page} for c in llm_context
         ]
         messages = build_rag_prompt(request.question, context_chunks)
 

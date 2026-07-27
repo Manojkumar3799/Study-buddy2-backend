@@ -53,20 +53,26 @@ def retrieve_relevant_chunks(
     question: str,
     top_k: int | None = None,
     similarity_threshold: float | None = None,
+    apply_threshold: bool = True,
 ) -> list[RetrievedChunk]:
     """
     Retrieve the most relevant chunks for a question from a document's
-    FAISS index, filtered by a minimum similarity threshold.
+    FAISS index, optionally filtered by a minimum similarity threshold.
 
     Args:
         document_id: Unique identifier of a previously stored document.
         question: The user's natural language question.
         top_k: Number of top candidates to retrieve before thresholding.
         similarity_threshold: Minimum cosine similarity score to keep a chunk.
+            Ignored if apply_threshold is False.
+        apply_threshold: Whether to filter results by similarity_threshold.
+            When False, returns the top_k nearest chunks regardless of score.
 
     Returns:
-        list[RetrievedChunk]: Chunks that passed the similarity threshold,
-            ordered by descending relevance. May be empty if none pass.
+        list[RetrievedChunk]: Chunks that passed the similarity threshold
+            (or all top_k chunks if apply_threshold is False), ordered by
+            descending relevance. May be empty if none pass or the index
+            has no vectors.
 
     Raises:
         VectorStoreNotFoundError: If no store exists for the document.
@@ -79,7 +85,8 @@ def retrieve_relevant_chunks(
 
     logger.info(
         f"Retrieval requested: document_id={document_id}, top_k={top_k}, "
-        f"threshold={similarity_threshold}, question='{question[:80]}'"
+        f"threshold={similarity_threshold}, apply_threshold={apply_threshold}, "
+        f"question='{question[:80]}'"
     )
 
     index, metadata = load_vector_store(document_id)
@@ -98,7 +105,7 @@ def retrieve_relevant_chunks(
         if idx == -1:
             continue
         score_float = float(score)
-        if score_float < similarity_threshold:
+        if apply_threshold and score_float < similarity_threshold:
             continue
 
         chunk_meta = chunks_metadata[idx]
