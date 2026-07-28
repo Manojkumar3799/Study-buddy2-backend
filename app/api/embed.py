@@ -48,7 +48,7 @@ async def embed_document(document_id: str) -> EmbeddingResponse:
     chunks = chunk_pages(pages)
 
     start = time.perf_counter()
-    embeddings = generate_embeddings(chunks)
+    embeddings = await generate_embeddings(chunks)
     elapsed = time.perf_counter() - start
 
     logger.info(

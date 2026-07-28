@@ -46,7 +46,7 @@ async def retrieve_chunks(document_id: str, request: RetrievalRequest) -> Retrie
     start = time.perf_counter()
     logger.info(f"Retrieval endpoint called: document_id={document_id}")
 
-    retrieved = retrieve_relevant_chunks(
+    retrieved = await retrieve_relevant_chunks(
         document_id=document_id,
         question=request.question,
         top_k=top_k,

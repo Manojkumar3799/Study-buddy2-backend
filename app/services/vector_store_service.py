@@ -43,7 +43,7 @@ def vector_store_exists(document_id: str) -> bool:
     return _index_path(document_id).exists() and _metadata_path(document_id).exists()
 
 
-def build_and_save_vector_store(document_id: str) -> dict[str, Any]:
+async def build_and_save_vector_store(document_id: str) -> dict[str, Any]:
     """
     Run the full pipeline (extract -> chunk -> embed) and persist a FAISS
     index plus chunk metadata for the given document.
@@ -69,7 +69,7 @@ def build_and_save_vector_store(document_id: str) -> dict[str, Any]:
     if not chunks:
         raise VectorStoreError("No chunks available to build a vector store.")
 
-    embeddings = generate_embeddings(chunks)
+    embeddings = await generate_embeddings(chunks)
     dimension = get_embedding_dimension()
 
     try:

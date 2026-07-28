@@ -33,7 +33,7 @@ async def store_document(document_id: str) -> StoreResponse:
     """
     logger.info(f"Store requested: document_id={document_id}")
 
-    result = build_and_save_vector_store(document_id)
+    result = await build_and_save_vector_store(document_id)
 
     return StoreResponse(
         document_id=result["document_id"],

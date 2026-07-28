@@ -4,7 +4,7 @@ import numpy as np
 
 from app.core.config import get_settings
 from app.core.logging_config import get_logger
-from app.services.embedding_service import load_embedding_model
+from app.services.embedding_service import get_embedding_model
 from app.services.vector_store_service import load_vector_store
 
 logger = get_logger(__name__)
@@ -29,7 +29,7 @@ class RetrievedChunk:
         self.score = score
 
 
-def embed_question(question: str) -> np.ndarray:
+async def embed_question(question: str) -> np.ndarray:
     """
     Generate a normalized embedding vector for a user question.
 
@@ -39,16 +39,13 @@ def embed_question(question: str) -> np.ndarray:
     Returns:
         np.ndarray: A (1, dimension) float32 embedding vector.
     """
-    model = load_embedding_model()
-    vector = model.encode(
-        [question],
-        convert_to_numpy=True,
-        normalize_embeddings=True,
-    )
-    return vector.astype("float32")
+    model = get_embedding_model()
+    embedding = await model.embed_query(question)
+    vector = np.array([embedding], dtype="float32")
+    return vector
 
 
-def retrieve_relevant_chunks(
+async def retrieve_relevant_chunks(
     document_id: str,
     question: str,
     top_k: int | None = None,
@@ -90,7 +87,7 @@ def retrieve_relevant_chunks(
         logger.warning(f"Vector store for {document_id} has no vectors")
         return []
 
-    question_vector = embed_question(question)
+    question_vector = await embed_question(question)
     scores, indices = index.search(question_vector, effective_k)
 
     retrieved: list[RetrievedChunk] = []

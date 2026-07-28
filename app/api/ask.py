@@ -72,7 +72,7 @@ async def ask_question(document_id: str, request: AskRequest) -> AskResponse:
 
     top_k, threshold = _resolve_retrieval_params(request)
 
-    retrieved = retrieve_relevant_chunks(
+    retrieved = await retrieve_relevant_chunks(
         document_id=document_id,
         question=request.question,
         top_k=top_k,
@@ -159,7 +159,7 @@ async def ask_question_stream(document_id: str, request: AskRequest) -> Streamin
     # Retrieval happens before streaming starts, so a 404 (bad document_id)
     # still surfaces as a normal HTTP error rather than being swallowed
     # inside the stream.
-    retrieved = retrieve_relevant_chunks(
+    retrieved = await retrieve_relevant_chunks(
         document_id=document_id,
         question=request.question,
         top_k=top_k,
