@@ -207,8 +207,12 @@ async def ask_question_stream(document_id: str, request: AskRequest) -> Streamin
 
         provider_used = None
         try:
-            for token in stream_answer(messages):
-                yield json.dumps({"type": "token", "content": token}) + "\n"
+            for item in stream_answer(messages):
+                if isinstance(item, tuple) and item[0] == "__provider__":
+                    # Sentinel from stream_answer carrying the winning provider name
+                    provider_used = item[1]
+                else:
+                    yield json.dumps({"type": "token", "content": item}) + "\n"
         except StudyForgeException as exc:
             logger.error(
                 f"Streaming failed for document_id={document_id}: "

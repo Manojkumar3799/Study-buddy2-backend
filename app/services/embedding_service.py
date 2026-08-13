@@ -1,9 +1,6 @@
 import litellm
 import numpy as np
-from app.core.config import get_settings
 from app.services.chunking_service import Chunk
-
-settings = get_settings()
 
 
 def _normalize_vector(v: list[float]) -> list[float]:
@@ -61,10 +58,7 @@ def get_embedding_model() -> EmbeddingModel:
     """Get the singleton instance of the EmbeddingModel."""
     global _embedding_model
     if _embedding_model is None:
-        model_name = settings.embedding_model_name
-        if model_name == "all-MiniLM-L6-v2":
-            model_name = "gemini/gemini-embedding-001"
-        _embedding_model = EmbeddingModel(model_name=model_name)
+        _embedding_model = EmbeddingModel()
     return _embedding_model
 
 

@@ -1,52 +1,87 @@
-"""Service layer for persisting and querying per-document FAISS vector stores."""
+﻿"""Service layer for persisting and querying per-document chunk embeddings in pgvector.
 
-import json
+Replaces the former FAISS-based implementation. All data lives in the
+``document_chunks`` Supabase Postgres table; no local index files are written.
+"""
+
 import time
-from pathlib import Path
 from typing import Any
-
-import faiss
-import numpy as np
+import asyncio
+from functools import partial
 
 from app.core.exceptions import VectorStoreError, VectorStoreNotFoundError
 from app.core.logging_config import get_logger
 from app.services.chunking_service import Chunk, chunk_pages
 from app.services.embedding_service import generate_embeddings, get_embedding_dimension
-from app.services.text_extraction_service import extract_text_from_pdf
+from app.services.pdf_service import download_pdf_from_storage
+from app.services.supabase_client import get_db_pool
+from app.services.text_extraction_service import extract_text_from_pdf_bytes
 
 logger = get_logger(__name__)
 
-VECTOR_STORE_DIR = Path("storage/vector_store")
-VECTOR_STORE_DIR.mkdir(parents=True, exist_ok=True)
+
+def _serialize_embedding(embedding: list[float]) -> str:
+    """Serialize a float list to the pgvector text literal ``'[0.1, ...]'``."""
+    return "[" + ",".join(str(v) for v in embedding) + "]"
 
 
-def _index_path(document_id: str) -> Path:
-    """Return the FAISS index file path for a document."""
-    return VECTOR_STORE_DIR / f"{document_id}.index"
+def _db_exists_sync(document_id: str) -> bool:
+    pool = get_db_pool()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM document_chunks WHERE document_id = %s", (document_id,))
+            count = cur.fetchone()[0]
+    return count > 0
 
 
-def _metadata_path(document_id: str) -> Path:
-    """Return the chunk metadata file path for a document."""
-    return VECTOR_STORE_DIR / f"{document_id}.metadata.json"
-
-
-def vector_store_exists(document_id: str) -> bool:
+async def vector_store_exists(document_id: str) -> bool:
     """
-    Check whether a FAISS index and metadata file exist for a document.
+    Check whether any chunk rows exist for a document in pgvector.
 
     Args:
         document_id: Unique identifier of the document.
 
     Returns:
-        bool: True if both index and metadata files exist.
+        bool: True if at least one chunk row exists.
     """
-    return _index_path(document_id).exists() and _metadata_path(document_id).exists()
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _db_exists_sync, document_id)
+
+
+def _db_save_sync(document_id: str, chunks: list[Chunk], embeddings: list[list[float]]) -> None:
+    pool = get_db_pool()
+    with pool.connection() as conn:
+        with conn.transaction():
+            with conn.cursor() as cur:
+                # Delete any pre-existing rows for this document
+                cur.execute("DELETE FROM document_chunks WHERE document_id = %s", (document_id,))
+                
+                # Bulk insert all chunks with their embeddings
+                for chunk, emb in zip(chunks, embeddings):
+                    cur.execute(
+                        """
+                        INSERT INTO document_chunks
+                            (document_id, chunk_id, text, start_page, end_page, embedding)
+                        VALUES (%s, %s, %s, %s, %s, %s::vector)
+                        """,
+                        (
+                            document_id,
+                            chunk.chunk_id,
+                            chunk.text,
+                            chunk.start_page,
+                            chunk.end_page,
+                            _serialize_embedding(emb),
+                        )
+                    )
 
 
 async def build_and_save_vector_store(document_id: str) -> dict[str, Any]:
     """
-    Run the full pipeline (extract -> chunk -> embed) and persist a FAISS
-    index plus chunk metadata for the given document.
+    Run the full pipeline (download -> extract -> chunk -> embed -> upsert) and
+    persist all chunk embeddings to the ``document_chunks`` pgvector table.
+
+    Existing rows for this document_id are deleted first so re-processing is
+    always idempotent.
 
     Args:
         document_id: Unique identifier of the previously uploaded document.
@@ -55,60 +90,40 @@ async def build_and_save_vector_store(document_id: str) -> dict[str, Any]:
         dict[str, Any]: Summary of the storage operation.
 
     Raises:
-        DocumentNotFoundError: If the document does not exist.
+        DocumentNotFoundError: If the PDF is not in Supabase Storage.
         TextExtractionError: If no meaningful text is found.
         EmbeddingGenerationError: If embedding generation fails.
-        VectorStoreError: If FAISS index construction or saving fails.
+        VectorStoreError: If the Postgres upsert fails.
     """
-    logger.info(f"Building vector store: document_id={document_id}")
+    logger.info(f"Building pgvector store: document_id={document_id}")
     start = time.perf_counter()
 
-    pages = extract_text_from_pdf(document_id)
-    chunks: list[Chunk] = chunk_pages(pages)
+    # 1. Fetch PDF bytes from Supabase Storage
+    pdf_bytes = await download_pdf_from_storage(document_id)
 
+    # 2. Extract text (works on raw bytes, no local file needed)
+    pages = extract_text_from_pdf_bytes(pdf_bytes, document_id=document_id)
+
+    # 3. Chunk
+    chunks: list[Chunk] = chunk_pages(pages)
     if not chunks:
         raise VectorStoreError("No chunks available to build a vector store.")
 
+    # 4. Embed
     embeddings = await generate_embeddings(chunks)
     dimension = get_embedding_dimension()
 
+    # 5. Upsert into pgvector (delete-then-insert for idempotency)
+    loop = asyncio.get_event_loop()
     try:
-        vectors = np.array(embeddings, dtype="float32")
-        # Embeddings are already normalized -> inner product == cosine similarity
-        index = faiss.IndexFlatIP(dimension)
-        index.add(vectors)
-        faiss.write_index(index, str(_index_path(document_id)))
+        await loop.run_in_executor(None, _db_save_sync, document_id, chunks, embeddings)
     except Exception as exc:
-        logger.error(f"FAISS index build/save failed: {exc}")
-        raise VectorStoreError() from exc
-
-    metadata = {
-        "document_id": document_id,
-        "embedding_dimension": dimension,
-        "total_chunks": len(chunks),
-        "chunks": [
-            {
-                "chunk_id": chunk.chunk_id,
-                "text": chunk.text,
-                "word_count": chunk.word_count,
-                "start_page": chunk.start_page,
-                "end_page": chunk.end_page,
-            }
-            for chunk in chunks
-        ],
-    }
-
-    try:
-        _metadata_path(document_id).write_text(
-            json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-    except Exception as exc:
-        logger.error(f"Metadata save failed: {exc}")
-        raise VectorStoreError() from exc
+        logger.error(f"pgvector upsert failed for document_id={document_id}: {exc}")
+        raise VectorStoreError(f"Failed to store embeddings in pgvector: {exc}") from exc
 
     elapsed = time.perf_counter() - start
     logger.info(
-        f"Vector store built: document_id={document_id}, chunks={len(chunks)}, "
+        f"pgvector store built: document_id={document_id}, chunks={len(chunks)}, "
         f"dimension={dimension}, time={elapsed:.2f}s"
     )
 
@@ -120,49 +135,35 @@ async def build_and_save_vector_store(document_id: str) -> dict[str, Any]:
     }
 
 
-def load_vector_store(document_id: str) -> tuple[faiss.Index, dict[str, Any]]:
+def _db_info_sync(document_id: str) -> int:
+    pool = get_db_pool()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM document_chunks WHERE document_id = %s", (document_id,))
+            return cur.fetchone()[0]
+
+
+async def get_vector_store_info(document_id: str) -> dict[str, Any]:
     """
-    Load a document's FAISS index and metadata from disk.
+    Return summary info about a document's stored chunk embeddings.
 
     Args:
         document_id: Unique identifier of the document.
 
     Returns:
-        tuple[faiss.Index, dict[str, Any]]: The FAISS index and its metadata.
+        dict[str, Any]: Summary metadata (chunk count, embedding dimension).
 
     Raises:
-        VectorStoreNotFoundError: If no store exists for the document.
-        VectorStoreError: If loading fails unexpectedly.
+        VectorStoreNotFoundError: If no chunks exist for this document.
     """
-    if not vector_store_exists(document_id):
+    loop = asyncio.get_event_loop()
+    count = await loop.run_in_executor(None, _db_info_sync, document_id)
+
+    if count == 0:
         raise VectorStoreNotFoundError(document_id)
 
-    try:
-        index = faiss.read_index(str(_index_path(document_id)))
-        metadata = json.loads(_metadata_path(document_id).read_text(encoding="utf-8"))
-    except Exception as exc:
-        logger.error(f"Failed to load vector store for {document_id}: {exc}")
-        raise VectorStoreError() from exc
-
-    return index, metadata
-
-
-def get_vector_store_info(document_id: str) -> dict[str, Any]:
-    """
-    Return summary info about a document's stored vector index.
-
-    Args:
-        document_id: Unique identifier of the document.
-
-    Returns:
-        dict[str, Any]: Summary metadata (chunk count, dimension, etc).
-
-    Raises:
-        VectorStoreNotFoundError: If no store exists for the document.
-    """
-    _, metadata = load_vector_store(document_id)
     return {
-        "document_id": metadata["document_id"],
-        "total_chunks_stored": metadata["total_chunks"],
-        "embedding_dimension": metadata["embedding_dimension"],
+        "document_id": document_id,
+        "total_chunks_stored": int(count),
+        "embedding_dimension": get_embedding_dimension(),
     }

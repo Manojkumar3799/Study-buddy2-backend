@@ -20,20 +20,37 @@ class Settings(BaseSettings):
     
     # Upload settings
     max_pdf_size_mb: int = 50
-    
+
+    # CORS — comma-separated list of allowed frontend origins.
+    # Set ALLOWED_ORIGINS in your deployment env to your Vercel URL.
+    # Example: "https://studyforge.vercel.app,http://localhost:3000"
+    allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+
+    # Supabase — Storage REST API (used by supabase-py for PDF blob storage)
+    supabase_url: str = ""
+    supabase_key: str = ""  # service role key
+    supabase_storage_bucket: str = "pdfs"
+
+    # Supabase — Direct Postgres connection string (used by asyncpg for pgvector)
+    # Find it in: Supabase Dashboard → Project Settings → Database → Connection string → Direct
+    # Format: postgresql://postgres.PROJECT_REF:PASSWORD@HOST:5432/postgres
+    supabase_db_url: str = ""
 
     # Chunking settings
     chunk_size_words: int = 500
     chunk_overlap_words: int = 100
 
-    # Embedding settings
-    embedding_model_name: str = "all-MiniLM-L6-v2"
+    # Embedding settings — embeddings are obtained via the Gemini hosted API
+    # through langchain-google-genai; there is no local model to configure.
 
 # Retrieval settings
     retrieval_top_k: int = 5
     similarity_threshold: float = 0.35
 
     # LLM settings
+    # Model names use the LiteLLM "provider/model" convention for readability;
+    # the "provider/" prefix is stripped automatically in llm_service.py when
+    # constructing LangChain chat model instances (which take bare model names).
     gemini_model: str = "gemini/gemini-2.5-flash"
     groq_model: str = "groq/llama-3.3-70b-versatile"
     grok_model: str = "xai/grok-2-latest"

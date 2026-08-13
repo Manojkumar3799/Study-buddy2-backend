@@ -1,16 +1,17 @@
-"""Service layer for extracting and cleaning text from PDFs."""
+﻿"""Service layer for extracting and cleaning text from PDFs.
 
-from pathlib import Path
+Text extraction now operates on raw PDF bytes rather than a local file path,
+making it compatible with Supabase Storage-backed deployments where no local
+PDF file exists on disk.
+"""
 
 import fitz  # PyMuPDF
 
-from app.core.exceptions import DocumentNotFoundError, TextExtractionError
+from app.core.exceptions import TextExtractionError
 from app.core.logging_config import get_logger
 from app.utils.text_cleaning import clean_text, is_text_meaningful
 
 logger = get_logger(__name__)
-
-UPLOAD_DIR = Path("storage/uploads")
 
 
 class PageText:
@@ -21,45 +22,23 @@ class PageText:
         self.text = text
 
 
-def get_pdf_path(document_id: str) -> Path:
+def extract_text_from_pdf_bytes(pdf_bytes: bytes, document_id: str = "<unknown>") -> list[PageText]:
     """
-    Resolve the file path for a given document ID.
+    Extract and clean text from every page of a PDF supplied as raw bytes.
 
     Args:
-        document_id: Unique identifier of the uploaded document.
-
-    Returns:
-        Path: Path to the stored PDF file.
-
-    Raises:
-        DocumentNotFoundError: If no file exists for the given ID.
-    """
-    file_path = UPLOAD_DIR / f"{document_id}.pdf"
-    if not file_path.exists():
-        logger.warning(f"Document not found: {document_id}")
-        raise DocumentNotFoundError(document_id)
-    return file_path
-
-
-def extract_text_from_pdf(document_id: str) -> list[PageText]:
-    """
-    Extract and clean text from every page of a stored PDF.
-
-    Args:
-        document_id: Unique identifier of the uploaded document.
+        pdf_bytes: Raw bytes of the PDF document.
+        document_id: Optional identifier used in log messages.
 
     Returns:
         list[PageText]: Cleaned text for each page.
 
     Raises:
-        DocumentNotFoundError: If the document does not exist.
         TextExtractionError: If no meaningful text is found in the PDF.
     """
-    file_path = get_pdf_path(document_id)
-
     logger.info(f"Starting text extraction: document_id={document_id}")
 
-    document = fitz.open(file_path)
+    document = fitz.open(stream=pdf_bytes, filetype="pdf")
     pages: list[PageText] = []
 
     try:
@@ -84,6 +63,15 @@ def extract_text_from_pdf(document_id: str) -> list[PageText]:
     )
 
     return pages
+
+
+async def extract_text_from_pdf(document_id: str) -> list[PageText]:
+    """
+    Backward-compatible entry point that fetches PDF from Supabase Storage and extracts text.
+    """
+    from app.services.pdf_service import download_pdf_from_storage
+    pdf_bytes = await download_pdf_from_storage(document_id)
+    return extract_text_from_pdf_bytes(pdf_bytes, document_id=document_id)
 
 
 def get_combined_text(pages: list[PageText]) -> str:

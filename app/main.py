@@ -1,6 +1,7 @@
 """StudyForge AI - FastAPI application entrypoint."""
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api import chunk, extract, upload, embed, store, retrieve, ask
@@ -19,6 +20,25 @@ app = FastAPI(
     version="0.1.0",
 )
 
+# ---------------------------------------------------------------------------
+# CORS — allow the deployed Vercel frontend and localhost for dev.
+# In production, narrow ALLOWED_ORIGINS to your exact Vercel URL via the env
+# var ALLOWED_ORIGINS (comma-separated list).  The wildcard fallback below
+# is safe for development only.
+# ---------------------------------------------------------------------------
+_raw_origins = settings.allowed_origins  # e.g. "https://myapp.vercel.app,http://localhost:3000"
+ALLOWED_ORIGINS: list[str] = [
+    o.strip() for o in _raw_origins.split(",") if o.strip()
+] or ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
 
 @app.on_event("startup")
 async def on_startup() -> None:
@@ -31,8 +51,10 @@ async def on_startup() -> None:
 
 @app.on_event("shutdown")
 async def on_shutdown() -> None:
-    """Log application shutdown."""
+    """Log application shutdown and close database connections."""
     logger.info(f"{settings.app_name} shutting down")
+    from app.services.supabase_client import close_db_pool
+    await close_db_pool()
 
 
 @app.exception_handler(StudyForgeException)

@@ -1,4 +1,4 @@
-"""API routes for building and inspecting per-document vector stores."""
+﻿"""API routes for building and inspecting per-document vector stores."""
 
 from fastapi import APIRouter
 
@@ -23,7 +23,7 @@ router = APIRouter(prefix="/store", tags=["Vector Store"])
 async def store_document(document_id: str) -> StoreResponse:
     """
     Run the full pipeline (extract -> chunk -> embed -> store) and persist
-    a FAISS index plus chunk metadata for the document.
+    embeddings in pgvector for the document.
 
     Args:
         document_id: Unique identifier returned by the /upload endpoint.
@@ -40,7 +40,7 @@ async def store_document(document_id: str) -> StoreResponse:
         total_chunks_stored=result["total_chunks_stored"],
         embedding_dimension=result["embedding_dimension"],
         processing_time_seconds=result["processing_time_seconds"],
-        message="Document successfully embedded and stored in FAISS.",
+        message="Document successfully embedded and stored in pgvector.",
     )
 
 
@@ -64,7 +64,7 @@ async def get_document_store_info(document_id: str) -> VectorStoreInfoResponse:
     """
     logger.info(f"Vector store info requested: document_id={document_id}")
 
-    info = get_vector_store_info(document_id)
+    info = await get_vector_store_info(document_id)
 
     return VectorStoreInfoResponse(
         document_id=info["document_id"],

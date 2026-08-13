@@ -1,4 +1,4 @@
-"""API routes for PDF upload."""
+﻿"""API routes for PDF upload."""
 
 import time
 
@@ -9,7 +9,7 @@ from app.core.logging_config import get_logger
 from app.models.schemas import ErrorResponse, UploadResponse
 from app.services.pdf_service import (
     generate_document_id,
-    save_pdf_to_disk,
+    upload_pdf_to_storage,
     validate_and_open_pdf,
     validate_content_type,
     validate_file_size,
@@ -33,7 +33,7 @@ async def upload_pdf(file: UploadFile = File(..., description="PDF file to uploa
     Upload and validate a PDF document.
 
     Validates content type, size, and PDF integrity, then stores the file
-    on disk under a unique document ID for later processing.
+    in Supabase Storage under a unique document ID for later processing.
 
     Args:
         file: The uploaded PDF file.
@@ -54,7 +54,7 @@ async def upload_pdf(file: UploadFile = File(..., description="PDF file to uploa
     document.close()
 
     document_id = generate_document_id()
-    save_pdf_to_disk(file_bytes, document_id)
+    await upload_pdf_to_storage(file_bytes, document_id)
 
     elapsed = time.perf_counter() - start
     logger.info(

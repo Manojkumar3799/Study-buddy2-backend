@@ -1,7 +1,6 @@
-"""Service layer for PDF validation and storage."""
+﻿"""Service layer for PDF validation and Supabase Storage upload."""
 
 import uuid
-from pathlib import Path
 
 import fitz  # PyMuPDF
 
@@ -11,15 +10,14 @@ from app.core.exceptions import (
     EmptyPDFError,
     InvalidPDFError,
     PDFTooLargeError,
+    StorageError,
     StudyForgeException,
 )
 from app.core.logging_config import get_logger
+from app.services.supabase_client import get_storage_client
 
 logger = get_logger(__name__)
 settings = get_settings()
-
-UPLOAD_DIR = Path("storage/uploads")
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 MAX_FILE_SIZE_BYTES = settings.max_pdf_size_mb * 1024 * 1024
 
@@ -87,31 +85,91 @@ def validate_and_open_pdf(file_bytes: bytes) -> fitz.Document:
     return document
 
 
-def save_pdf_to_disk(file_bytes: bytes, document_id: str) -> Path:
+async def upload_pdf_to_storage(file_bytes: bytes, document_id: str) -> str:
     """
-    Persist the uploaded PDF bytes to local storage.
+    Upload the PDF bytes to Supabase Storage.
+
+    The file is stored at ``{document_id}.pdf`` inside the configured bucket.
+    The upload uses upsert semantics so re-processing the same document_id
+    simply overwrites the previous file rather than raising a conflict error.
 
     Args:
-        file_bytes: Raw bytes of the uploaded PDF.
-        document_id: Unique identifier used as the filename.
+        file_bytes: Raw bytes of the validated PDF.
+        document_id: Unique identifier used as the storage key.
 
     Returns:
-        Path: The path where the file was saved.
+        str: The storage path (``{document_id}.pdf``) for reference.
 
     Raises:
-        StudyForgeException: If the file cannot be written to disk
-            (e.g. permissions issue, disk full).
+        StorageError: If the upload to Supabase Storage fails.
     """
-    file_path = UPLOAD_DIR / f"{document_id}.pdf"
+    import asyncio
+    from functools import partial
+
+    storage_path = f"{document_id}.pdf"
+    bucket = settings.supabase_storage_bucket
+
     try:
-        file_path.write_bytes(file_bytes)
-    except OSError as exc:
-        logger.error(f"Failed to write PDF to disk: {exc}")
-        raise StudyForgeException(
-            "Failed to save the uploaded file. Please try again.", status_code=500
+        client = get_storage_client()
+        # supabase-py storage is synchronous; run in executor to avoid blocking
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            None,
+            partial(
+                client.storage.from_(bucket).upload,
+                path=storage_path,
+                file=file_bytes,
+                file_options={"content-type": "application/pdf", "upsert": "true"},
+            ),
+        )
+    except Exception as exc:
+        logger.error(f"Failed to upload PDF to Supabase Storage: {exc}")
+        raise StorageError(
+            f"Failed to upload PDF to cloud storage: {exc}"
         ) from exc
-    logger.info(f"Saved PDF to disk: {file_path}")
-    return file_path
+
+    logger.info(f"PDF uploaded to Supabase Storage: bucket={bucket}, path={storage_path}")
+    return storage_path
+
+
+async def download_pdf_from_storage(document_id: str) -> bytes:
+    """
+    Download PDF bytes from Supabase Storage.
+
+    Args:
+        document_id: Unique identifier of the previously uploaded document.
+
+    Returns:
+        bytes: The raw PDF bytes.
+
+    Raises:
+        DocumentNotFoundError: If no object exists for this document_id.
+        StorageError: If the download fails for any other reason.
+    """
+    import asyncio
+    from functools import partial
+    from app.core.exceptions import DocumentNotFoundError
+
+    storage_path = f"{document_id}.pdf"
+    bucket = settings.supabase_storage_bucket
+
+    try:
+        client = get_storage_client()
+        loop = asyncio.get_event_loop()
+        pdf_bytes: bytes = await loop.run_in_executor(
+            None,
+            partial(client.storage.from_(bucket).download, storage_path),
+        )
+    except Exception as exc:
+        err_str = str(exc).lower()
+        if "not found" in err_str or "404" in err_str:
+            raise DocumentNotFoundError(document_id) from exc
+        logger.error(f"Failed to download PDF from Supabase Storage: {exc}")
+        raise StorageError(f"Failed to download PDF from cloud storage: {exc}") from exc
+
+    logger.info(f"PDF downloaded from Supabase Storage: path={storage_path}, size={len(pdf_bytes)}")
+    return pdf_bytes
+
 
 def generate_document_id() -> str:
     """Generate a unique document identifier."""

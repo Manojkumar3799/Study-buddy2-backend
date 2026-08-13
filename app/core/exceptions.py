@@ -42,7 +42,7 @@ class PDFTooLargeError(StudyForgeException):
 
 
 class DocumentNotFoundError(StudyForgeException):
-    """Raised when a requested document ID does not exist on disk."""
+    """Raised when a requested document ID does not exist in storage."""
 
     def __init__(self, document_id: str) -> None:
         super().__init__(f"Document with ID '{document_id}' not found.", status_code=404)
@@ -59,7 +59,14 @@ class TextExtractionError(StudyForgeException):
         super().__init__(message, status_code=422)
 
 
-# --- Embedding / Vector store errors ------------------------------------
+# --- Embedding / Vector store / Storage errors --------------------------
+
+
+class StorageError(StudyForgeException):
+    """Raised when a Supabase Storage upload or download operation fails."""
+
+    def __init__(self, message: str = "Storage operation failed.") -> None:
+        super().__init__(message, status_code=500)
 
 
 class EmbeddingGenerationError(StudyForgeException):

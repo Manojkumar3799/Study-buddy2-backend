@@ -1,11 +1,14 @@
-"""Service layer for embedding questions and retrieving relevant chunks via FAISS."""
+﻿"""Service layer for embedding questions and retrieving relevant chunks via Supabase pgvector."""
 
-import numpy as np
+import time
+import asyncio
+from functools import partial
 
 from app.core.config import get_settings
 from app.core.logging_config import get_logger
 from app.services.embedding_service import get_embedding_model
-from app.services.vector_store_service import load_vector_store
+from app.services.supabase_client import get_db_pool
+from app.core.exceptions import VectorStoreNotFoundError
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -29,7 +32,7 @@ class RetrievedChunk:
         self.score = score
 
 
-async def embed_question(question: str) -> np.ndarray:
+async def embed_question(question: str) -> list[float]:
     """
     Generate a normalized embedding vector for a user question.
 
@@ -37,12 +40,46 @@ async def embed_question(question: str) -> np.ndarray:
         question: The user's natural language question.
 
     Returns:
-        np.ndarray: A (1, dimension) float32 embedding vector.
+        list[float]: The embedding vector as a list of floats.
     """
     model = get_embedding_model()
     embedding = await model.embed_query(question)
-    vector = np.array([embedding], dtype="float32")
-    return vector
+    return embedding
+
+
+def _db_retrieve_sync(document_id: str, emb_str: str, similarity_threshold: float, top_k: int) -> tuple[int, list[dict]]:
+    pool = get_db_pool()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM document_chunks WHERE document_id = %s", (document_id,))
+            count = cur.fetchone()[0]
+            if count == 0:
+                return 0, []
+
+            # Execute pgvector similarity search query using cosine distance (<=>)
+            cur.execute(
+                """
+                SELECT chunk_id, text, start_page, end_page,
+                       1 - (embedding <=> %s::vector) AS similarity
+                FROM document_chunks
+                WHERE document_id = %s
+                  AND 1 - (embedding <=> %s::vector) >= %s
+                ORDER BY embedding <=> %s::vector ASC
+                LIMIT %s
+                """,
+                (emb_str, document_id, emb_str, similarity_threshold, emb_str, top_k),
+            )
+            rows = cur.fetchall()
+            results = []
+            for r in rows:
+                results.append({
+                    "chunk_id": r[0],
+                    "text": r[1],
+                    "start_page": r[2],
+                    "end_page": r[3],
+                    "similarity": r[4],
+                })
+            return count, results
 
 
 async def retrieve_relevant_chunks(
@@ -52,8 +89,8 @@ async def retrieve_relevant_chunks(
     similarity_threshold: float | None = None,
 ) -> list[RetrievedChunk]:
     """
-    Retrieve the most relevant chunks for a question from a document's
-    FAISS index, filtered by a minimum similarity threshold.
+    Retrieve the most relevant chunks for a question from Supabase pgvector,
+    filtered by a minimum similarity threshold.
 
     Args:
         document_id: Unique identifier of a previously stored document.
@@ -67,7 +104,7 @@ async def retrieve_relevant_chunks(
 
     Raises:
         VectorStoreNotFoundError: If no store exists for the document.
-        VectorStoreError: If loading the index fails.
+        VectorStoreError: If query execution fails.
     """
     top_k = top_k or settings.retrieval_top_k
     similarity_threshold = (
@@ -79,39 +116,37 @@ async def retrieve_relevant_chunks(
         f"threshold={similarity_threshold}, question='{question[:80]}'"
     )
 
-    index, metadata = load_vector_store(document_id)
-    chunks_metadata = metadata["chunks"]
+    question_emb = await embed_question(question)
+    emb_str = "[" + ",".join(str(v) for v in question_emb) + "]"
 
-    effective_k = min(top_k, index.ntotal)
-    if effective_k == 0:
-        logger.warning(f"Vector store for {document_id} has no vectors")
-        return []
+    loop = asyncio.get_event_loop()
+    count, rows = await loop.run_in_executor(
+        None,
+        _db_retrieve_sync,
+        document_id,
+        emb_str,
+        similarity_threshold,
+        top_k,
+    )
 
-    question_vector = await embed_question(question)
-    scores, indices = index.search(question_vector, effective_k)
+    if count == 0:
+        raise VectorStoreNotFoundError(document_id)
 
     retrieved: list[RetrievedChunk] = []
-    for score, idx in zip(scores[0], indices[0]):
-        if idx == -1:
-            continue
-        score_float = float(score)
-        if score_float < similarity_threshold:
-            continue
-
-        chunk_meta = chunks_metadata[idx]
+    for r in rows:
         retrieved.append(
             RetrievedChunk(
-                chunk_id=chunk_meta["chunk_id"],
-                text=chunk_meta["text"],
-                start_page=chunk_meta["start_page"],
-                end_page=chunk_meta["end_page"],
-                score=round(score_float, 4),
+                chunk_id=r["chunk_id"],
+                text=r["text"],
+                start_page=r["start_page"],
+                end_page=r["end_page"],
+                score=round(r["similarity"], 4),
             )
         )
 
     logger.info(
         f"Retrieval complete: document_id={document_id}, "
-        f"candidates={effective_k}, passed_threshold={len(retrieved)}"
+        f"candidates_found={len(rows)}, passed_threshold={len(retrieved)}"
     )
 
     return retrieved
