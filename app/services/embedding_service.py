@@ -33,10 +33,11 @@ class EmbeddingModel:
             response = await litellm.aembedding(
                 model=self.model_name,
                 input=batch,
-                dimensions=self.dimensions,
                 task_type="RETRIEVAL_DOCUMENT",
             )
-            embeddings.extend(_normalize_vector(item["embedding"]) for item in response.data)
+            embeddings.extend(
+                _normalize_vector(item["embedding"][: self.dimensions]) for item in response.data
+            )
 
         return embeddings
 
@@ -45,10 +46,9 @@ class EmbeddingModel:
         response = await litellm.aembedding(
             model=self.model_name,
             input=[text],
-            dimensions=self.dimensions,
             task_type="RETRIEVAL_QUERY",
         )
-        return _normalize_vector(response.data[0]["embedding"])
+        return _normalize_vector(response.data[0]["embedding"][: self.dimensions])
 
 
 _embedding_model: EmbeddingModel | None = None

@@ -33,7 +33,7 @@ async def extract_document_text(document_id: str) -> ExtractionResponse:
     start = time.perf_counter()
     logger.info(f"Extraction requested: document_id={document_id}")
 
-    pages = extract_text_from_pdf(document_id)
+    pages = await extract_text_from_pdf(document_id)
 
     page_responses = [
         PageTextResponse(

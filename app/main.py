@@ -54,7 +54,7 @@ async def on_shutdown() -> None:
     """Log application shutdown and close database connections."""
     logger.info(f"{settings.app_name} shutting down")
     from app.services.supabase_client import close_db_pool
-    await close_db_pool()
+    close_db_pool()
 
 
 @app.exception_handler(StudyForgeException)
@@ -118,16 +118,3 @@ app.include_router(embed.router)
 app.include_router(store.router)
 app.include_router(retrieve.router)
 app.include_router(ask.router)
-
-# ```
-
-# Also create:
-
-# **`backend/storage/vector_store/.gitkeep`**
-# ```
-# ```
-
-# Also create an empty file so the storage folder is tracked:
-
-# **`backend/storage/uploads/.gitkeep`**
-#

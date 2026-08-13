@@ -44,7 +44,7 @@ async def embed_document(document_id: str) -> EmbeddingResponse:
     """
     logger.info(f"Embedding requested: document_id={document_id}")
 
-    pages = extract_text_from_pdf(document_id)
+    pages = await extract_text_from_pdf(document_id)
     chunks = chunk_pages(pages)
 
     start = time.perf_counter()
@@ -67,7 +67,7 @@ async def embed_document(document_id: str) -> EmbeddingResponse:
 
     return EmbeddingResponse(
         document_id=document_id,
-        model_name=settings.embedding_model_name,
+        model_name="gemini-embedding-001",
         embedding_dimension=get_embedding_dimension(),
         total_chunks_embedded=len(embeddings),
         processing_time_seconds=round(elapsed, 3),

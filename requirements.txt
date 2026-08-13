@@ -13,6 +13,7 @@ pymupdf==1.28.0
 
 # --- Embeddings & LLM routing ---
 litellm==1.57.4
+numpy==1.26.4
 
 # --- Vector store (pgvector via psycopg) ---
 psycopg[binary]

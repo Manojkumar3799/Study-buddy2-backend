@@ -36,7 +36,7 @@ async def chunk_document(document_id: str) -> ChunkingResponse:
     start = time.perf_counter()
     logger.info(f"Chunking requested: document_id={document_id}")
 
-    pages = extract_text_from_pdf(document_id)
+    pages = await extract_text_from_pdf(document_id)
     chunks = chunk_pages(pages)
 
     chunk_responses = [
