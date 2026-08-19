@@ -13,10 +13,14 @@ class Settings(BaseSettings):
     debug: bool = True
     log_level: str = "INFO"
 
-    # LLM provider keys (used in later features)
+    # LLM provider keys
     gemini_api_key: str = ""
     groq_api_key: str = ""
     grok_api_key: str = ""
+
+    # Firecrawl MCP — web research integration
+    # Get a free key at https://firecrawl.dev
+    firecrawl_api_key: str = ""
     
     # Upload settings
     max_pdf_size_mb: int = 50

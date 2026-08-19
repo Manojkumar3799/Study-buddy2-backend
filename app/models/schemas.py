@@ -1,6 +1,16 @@
 """Pydantic request/response schemas."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+
+class WebSourceResponse(BaseModel):
+    """A single web search result returned when answering via Firecrawl web research."""
+
+    title: str = Field(..., description="Page title from the web search result.")
+    url: str = Field(..., description="Full URL of the web page.")
+    domain: str = Field(..., description="Bare hostname / domain of the web page.")
 
 
 class UploadResponse(BaseModel):
@@ -144,6 +154,15 @@ class AskRequest(BaseModel):
     similarity_threshold: float | None = Field(
         default=None, ge=0.0, le=1.0, description="Override similarity threshold."
     )
+    mode: Literal["auto", "pdf", "web"] = Field(
+        default="auto",
+        description=(
+            "Answering mode. "
+            "'auto' lets the LLM decide between PDF RAG and web research. "
+            "'pdf' always uses the uploaded document. "
+            "'web' always uses Firecrawl web research."
+        ),
+    )
 
 
 class AskResponse(BaseModel):
@@ -151,13 +170,22 @@ class AskResponse(BaseModel):
 
     document_id: str = Field(..., description="Unique identifier for the document.")
     question: str = Field(..., description="The question that was asked.")
-    answer: str = Field(..., description="The generated answer, grounded in the document.")
+    answer: str = Field(..., description="The generated answer.")
     provider_used: str | None = Field(
-        default=None, description="Which LLM provider generated the answer (null if no context found)."
+        default=None, description="Which LLM provider generated the answer (null if no context)."
+    )
+    source_type: Literal["pdf", "web"] = Field(
+        default="pdf",
+        description="Whether the answer was grounded in the PDF ('pdf') or web research ('web').",
     )
     sources: list[RetrievedChunkResponse] = Field(
-        ..., description="Chunks used as context for the answer."
+        default_factory=list,
+        description="PDF chunks used as context (populated when source_type='pdf').",
+    )
+    web_sources: list[WebSourceResponse] = Field(
+        default_factory=list,
+        description="Web search results used as context (populated when source_type='web').",
     )
     has_sufficient_context: bool = Field(
-        ..., description="Whether relevant context was found in the document."
+        ..., description="Whether relevant context was found."
     )
