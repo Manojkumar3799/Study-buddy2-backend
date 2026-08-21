@@ -29,9 +29,10 @@ import json
 import time
 from typing import Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
+from app.core.auth import get_current_user
 from app.core.config import get_settings
 from app.core.exceptions import StudyForgeException
 from app.core.logging_config import get_logger
@@ -129,10 +130,18 @@ async def _resolve_route(
     },
     summary="Ask a question (non-streaming, full JSON response)",
 )
-async def ask_question(document_id: str, request: AskRequest) -> AskResponse:
+async def ask_question(
+    document_id: str,
+    request: AskRequest,
+    user_id: str = Depends(get_current_user),
+) -> AskResponse:
     """
     Answer a question using either the stored PDF (RAG) or Firecrawl web research,
     routed according to the ``mode`` field.
+
+    Requires authentication. For PDF RAG path, retrieval is scoped to the
+    authenticated user's chunks only — requesting a document_id owned by
+    another user returns 404 (VectorStoreNotFoundError).
 
     Non-streaming variant: waits for the full answer before responding.
     For real-time token streaming use ``POST /ask/{document_id}/stream``.
@@ -140,6 +149,7 @@ async def ask_question(document_id: str, request: AskRequest) -> AskResponse:
     Args:
         document_id: Unique identifier of a previously stored document.
         request: The question, optional retrieval overrides, and mode.
+        user_id: Injected by the ``get_current_user`` dependency.
 
     Returns:
         AskResponse: Generated answer, sources, provider, and source_type.
@@ -205,6 +215,7 @@ async def ask_question(document_id: str, request: AskRequest) -> AskResponse:
     top_k, threshold = _resolve_retrieval_params(request)
     retrieved = await retrieve_relevant_chunks(
         document_id=document_id,
+        user_id=user_id,
         question=request.question,
         top_k=top_k,
         similarity_threshold=threshold,
@@ -270,7 +281,11 @@ async def ask_question(document_id: str, request: AskRequest) -> AskResponse:
     },
     summary="Ask a question (streaming, Server-Sent-Events style)",
 )
-async def ask_question_stream(document_id: str, request: AskRequest) -> StreamingResponse:
+async def ask_question_stream(
+    document_id: str,
+    request: AskRequest,
+    user_id: str = Depends(get_current_user),
+) -> StreamingResponse:
     """
     Answer a question with the response streamed token-by-token.
 
@@ -311,6 +326,7 @@ async def ask_question_stream(document_id: str, request: AskRequest) -> Streamin
         top_k, threshold = _resolve_retrieval_params(request)
         retrieved = await retrieve_relevant_chunks(
             document_id=document_id,
+            user_id=user_id,
             question=request.question,
             top_k=top_k,
             similarity_threshold=threshold,

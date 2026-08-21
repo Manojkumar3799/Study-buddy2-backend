@@ -1,4 +1,4 @@
-﻿"""Service layer for PDF validation and Supabase Storage upload."""
+"""Service layer for PDF validation and Supabase Storage upload."""
 
 import uuid
 
@@ -85,20 +85,22 @@ def validate_and_open_pdf(file_bytes: bytes) -> fitz.Document:
     return document
 
 
-async def upload_pdf_to_storage(file_bytes: bytes, document_id: str) -> str:
+async def upload_pdf_to_storage(file_bytes: bytes, document_id: str, user_id: str) -> str:
     """
     Upload the PDF bytes to Supabase Storage.
 
-    The file is stored at ``{document_id}.pdf`` inside the configured bucket.
-    The upload uses upsert semantics so re-processing the same document_id
-    simply overwrites the previous file rather than raising a conflict error.
+    The file is stored at ``{user_id}/{document_id}.pdf`` inside the configured
+    bucket, providing per-user file isolation at the storage layer.  The upload
+    uses upsert semantics so re-processing the same document_id simply overwrites
+    the previous file rather than raising a conflict error.
 
     Args:
         file_bytes: Raw bytes of the validated PDF.
         document_id: Unique identifier used as the storage key.
+        user_id: The authenticated user's UUID (from Supabase Auth JWT).
 
     Returns:
-        str: The storage path (``{document_id}.pdf``) for reference.
+        str: The storage path (``{user_id}/{document_id}.pdf``) for reference.
 
     Raises:
         StorageError: If the upload to Supabase Storage fails.
@@ -106,7 +108,7 @@ async def upload_pdf_to_storage(file_bytes: bytes, document_id: str) -> str:
     import asyncio
     from functools import partial
 
-    storage_path = f"{document_id}.pdf"
+    storage_path = f"{user_id}/{document_id}.pdf"
     bucket = settings.supabase_storage_bucket
 
     try:
@@ -132,25 +134,29 @@ async def upload_pdf_to_storage(file_bytes: bytes, document_id: str) -> str:
     return storage_path
 
 
-async def download_pdf_from_storage(document_id: str) -> bytes:
+async def download_pdf_from_storage(document_id: str, user_id: str) -> bytes:
     """
     Download PDF bytes from Supabase Storage.
 
     Args:
         document_id: Unique identifier of the previously uploaded document.
+        user_id: The authenticated user's UUID. Used to construct the
+            per-user storage path ``{user_id}/{document_id}.pdf``.
+            If the path does not exist, the user either does not own this
+            document or it was never uploaded.
 
     Returns:
         bytes: The raw PDF bytes.
 
     Raises:
-        DocumentNotFoundError: If no object exists for this document_id.
+        DocumentNotFoundError: If no object exists for this user/document_id.
         StorageError: If the download fails for any other reason.
     """
     import asyncio
     from functools import partial
     from app.core.exceptions import DocumentNotFoundError
 
-    storage_path = f"{document_id}.pdf"
+    storage_path = f"{user_id}/{document_id}.pdf"
     bucket = settings.supabase_storage_bucket
 
     try:

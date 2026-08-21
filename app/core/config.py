@@ -40,6 +40,21 @@ class Settings(BaseSettings):
     # Format: postgresql://postgres.PROJECT_REF:PASSWORD@HOST:5432/postgres
     supabase_db_url: str = ""
 
+    # Supabase Auth — JWT verification
+    # For HS256 (local Supabase emulator / legacy projects):
+    #   Set SUPABASE_JWT_SECRET to your project's JWT secret
+    #   (found in Supabase Dashboard → Project Settings → API → JWT Settings)
+    # For RS256 (modern Supabase projects, recommended for production):
+    #   The backend fetches keys automatically from the JWKS endpoint derived
+    #   from SUPABASE_URL. Leave SUPABASE_JWT_SECRET empty in this case.
+    supabase_jwt_secret: str = ""
+
+    @property
+    def supabase_jwks_url(self) -> str:
+        """Derive the Supabase JWKS endpoint URL from the project URL."""
+        base = self.supabase_url.rstrip("/")
+        return f"{base}/auth/v1/.well-known/jwks.json" if base else ""
+
     # Chunking settings
     chunk_size_words: int = 500
     chunk_overlap_words: int = 100

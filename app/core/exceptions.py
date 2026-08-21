@@ -155,3 +155,35 @@ class NetworkError(StudyForgeException):
 
     def __init__(self, message: str = "A network error occurred. Please try again.") -> None:
         super().__init__(message, status_code=502)
+
+
+# --- Authentication / Authorization errors ---------------------------------
+
+
+class AuthenticationError(StudyForgeException):
+    """Raised when a request is missing a valid JWT Bearer token.
+
+    This covers: missing Authorization header, malformed token, invalid
+    signature, and expired tokens.  Always maps to HTTP 401 Unauthorized.
+    """
+
+    def __init__(
+        self,
+        message: str = "Authentication required. Provide a valid Bearer token.",
+    ) -> None:
+        super().__init__(message, status_code=401)
+
+
+class DocumentAccessDeniedError(StudyForgeException):
+    """Raised when an authenticated user requests a document they do not own.
+
+    Deliberately returns 404 (Not Found) rather than 403 (Forbidden) to
+    prevent document enumeration: a 403 would confirm the document_id exists
+    but belongs to someone else, leaking information about other users' data.
+    """
+
+    def __init__(self, document_id: str) -> None:
+        super().__init__(
+            f"Document with ID '{document_id}' not found.",
+            status_code=404,
+        )

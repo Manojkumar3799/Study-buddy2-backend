@@ -1,8 +1,9 @@
 """API routes for question-based chunk retrieval."""
 import time
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from app.core.auth import get_current_user
 from app.core.config import get_settings
 from app.core.logging_config import get_logger
 from app.models.schemas import ErrorResponse, RetrievalRequest, RetrievalResponse, RetrievedChunkResponse
@@ -18,13 +19,21 @@ router = APIRouter(prefix="/retrieve", tags=["Retrieval"])
     "/{document_id}",
     response_model=RetrievalResponse,
     responses={
+        401: {"model": ErrorResponse, "description": "Missing or invalid authentication token"},
         404: {"model": ErrorResponse, "description": "Vector store not found"},
         500: {"model": ErrorResponse, "description": "Retrieval failed"},
     },
 )
-async def retrieve_chunks(document_id: str, request: RetrievalRequest) -> RetrievalResponse:
+async def retrieve_chunks(
+    document_id: str,
+    request: RetrievalRequest,
+    user_id: str = Depends(get_current_user),
+) -> RetrievalResponse:
     """
     Retrieve the most relevant chunks for a question from a stored document.
+
+    Only returns chunks for documents owned by the authenticated user.
+    Requesting a ``document_id`` owned by a different user returns 404.
 
     This endpoint is for inspecting retrieval quality before the LLM answer
     generation step is wired in.
@@ -32,6 +41,7 @@ async def retrieve_chunks(document_id: str, request: RetrievalRequest) -> Retrie
     Args:
         document_id: Unique identifier of a previously stored document.
         request: The question and optional retrieval overrides.
+        user_id: Injected by the ``get_current_user`` dependency.
 
     Returns:
         RetrievalResponse: Matching chunks and whether sufficient context was found.
@@ -44,10 +54,11 @@ async def retrieve_chunks(document_id: str, request: RetrievalRequest) -> Retrie
     )
 
     start = time.perf_counter()
-    logger.info(f"Retrieval endpoint called: document_id={document_id}")
+    logger.info(f"Retrieval endpoint called: document_id={document_id}, user_id={user_id}")
 
     retrieved = await retrieve_relevant_chunks(
         document_id=document_id,
+        user_id=user_id,
         question=request.question,
         top_k=top_k,
         similarity_threshold=threshold,

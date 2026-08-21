@@ -1,4 +1,4 @@
-﻿"""Service layer for persisting and querying per-document chunk embeddings in pgvector.
+"""Service layer for persisting and querying per-document chunk embeddings in pgvector.
 
 Replaces the former FAISS-based implementation. All data lives in the
 ``document_chunks`` Supabase Postgres table; no local index files are written.
@@ -25,47 +25,55 @@ def _serialize_embedding(embedding: list[float]) -> str:
     return "[" + ",".join(str(v) for v in embedding) + "]"
 
 
-def _db_exists_sync(document_id: str) -> bool:
+def _db_exists_sync(document_id: str, user_id: str) -> bool:
     pool = get_db_pool()
     with pool.connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM document_chunks WHERE document_id = %s", (document_id,))
+            cur.execute(
+                "SELECT COUNT(*) FROM document_chunks WHERE document_id = %s AND user_id = %s",
+                (document_id, user_id),
+            )
             count = cur.fetchone()[0]
     return count > 0
 
 
-async def vector_store_exists(document_id: str) -> bool:
+async def vector_store_exists(document_id: str, user_id: str) -> bool:
     """
     Check whether any chunk rows exist for a document in pgvector.
 
     Args:
         document_id: Unique identifier of the document.
+        user_id: The authenticated user's UUID.
 
     Returns:
-        bool: True if at least one chunk row exists.
+        bool: True if at least one chunk row exists for this user + document.
     """
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _db_exists_sync, document_id)
+    return await loop.run_in_executor(None, _db_exists_sync, document_id, user_id)
 
 
-def _db_save_sync(document_id: str, chunks: list[Chunk], embeddings: list[list[float]]) -> None:
+def _db_save_sync(document_id: str, user_id: str, chunks: list[Chunk], embeddings: list[list[float]]) -> None:
     pool = get_db_pool()
     with pool.connection() as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                # Delete any pre-existing rows for this document
-                cur.execute("DELETE FROM document_chunks WHERE document_id = %s", (document_id,))
-                
-                # Bulk insert all chunks with their embeddings
+                # Delete any pre-existing rows for this document OWNED BY this user
+                cur.execute(
+                    "DELETE FROM document_chunks WHERE document_id = %s AND user_id = %s",
+                    (document_id, user_id),
+                )
+
+                # Bulk insert all chunks with their embeddings and user_id
                 for chunk, emb in zip(chunks, embeddings):
                     cur.execute(
                         """
                         INSERT INTO document_chunks
-                            (document_id, chunk_id, text, start_page, end_page, embedding)
-                        VALUES (%s, %s, %s, %s, %s, %s::vector)
+                            (document_id, user_id, chunk_id, text, start_page, end_page, embedding)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s::vector)
                         """,
                         (
                             document_id,
+                            user_id,
                             chunk.chunk_id,
                             chunk.text,
                             chunk.start_page,
@@ -75,16 +83,18 @@ def _db_save_sync(document_id: str, chunks: list[Chunk], embeddings: list[list[f
                     )
 
 
-async def build_and_save_vector_store(document_id: str) -> dict[str, Any]:
+async def build_and_save_vector_store(document_id: str, user_id: str) -> dict[str, Any]:
     """
     Run the full pipeline (download -> extract -> chunk -> embed -> upsert) and
     persist all chunk embeddings to the ``document_chunks`` pgvector table.
 
-    Existing rows for this document_id are deleted first so re-processing is
-    always idempotent.
+    Existing rows for this document_id + user_id are deleted first so
+    re-processing is always idempotent.
 
     Args:
         document_id: Unique identifier of the previously uploaded document.
+        user_id: The authenticated user's UUID. Used for storage path lookup
+            and to tag chunk rows so only this user can query them.
 
     Returns:
         dict[str, Any]: Summary of the storage operation.
@@ -95,11 +105,11 @@ async def build_and_save_vector_store(document_id: str) -> dict[str, Any]:
         EmbeddingGenerationError: If embedding generation fails.
         VectorStoreError: If the Postgres upsert fails.
     """
-    logger.info(f"Building pgvector store: document_id={document_id}")
+    logger.info(f"Building pgvector store: document_id={document_id}, user_id={user_id}")
     start = time.perf_counter()
 
-    # 1. Fetch PDF bytes from Supabase Storage
-    pdf_bytes = await download_pdf_from_storage(document_id)
+    # 1. Fetch PDF bytes from Supabase Storage (user-scoped path)
+    pdf_bytes = await download_pdf_from_storage(document_id, user_id)
 
     # 2. Extract text (works on raw bytes, no local file needed)
     pages = extract_text_from_pdf_bytes(pdf_bytes, document_id=document_id)
@@ -113,10 +123,10 @@ async def build_and_save_vector_store(document_id: str) -> dict[str, Any]:
     embeddings = await generate_embeddings(chunks)
     dimension = get_embedding_dimension()
 
-    # 5. Upsert into pgvector (delete-then-insert for idempotency)
+    # 5. Upsert into pgvector (delete-then-insert for idempotency, scoped to user_id)
     loop = asyncio.get_event_loop()
     try:
-        await loop.run_in_executor(None, _db_save_sync, document_id, chunks, embeddings)
+        await loop.run_in_executor(None, _db_save_sync, document_id, user_id, chunks, embeddings)
     except Exception as exc:
         logger.error(f"pgvector upsert failed for document_id={document_id}: {exc}")
         raise VectorStoreError(f"Failed to store embeddings in pgvector: {exc}") from exc
@@ -135,29 +145,34 @@ async def build_and_save_vector_store(document_id: str) -> dict[str, Any]:
     }
 
 
-def _db_info_sync(document_id: str) -> int:
+def _db_info_sync(document_id: str, user_id: str) -> int:
     pool = get_db_pool()
     with pool.connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) FROM document_chunks WHERE document_id = %s", (document_id,))
+            cur.execute(
+                "SELECT COUNT(*) FROM document_chunks WHERE document_id = %s AND user_id = %s",
+                (document_id, user_id),
+            )
             return cur.fetchone()[0]
 
 
-async def get_vector_store_info(document_id: str) -> dict[str, Any]:
+async def get_vector_store_info(document_id: str, user_id: str) -> dict[str, Any]:
     """
     Return summary info about a document's stored chunk embeddings.
 
     Args:
         document_id: Unique identifier of the document.
+        user_id: The authenticated user's UUID. Restricts the query to only
+            the requesting user's chunks.
 
     Returns:
         dict[str, Any]: Summary metadata (chunk count, embedding dimension).
 
     Raises:
-        VectorStoreNotFoundError: If no chunks exist for this document.
+        VectorStoreNotFoundError: If no chunks exist for this user + document.
     """
     loop = asyncio.get_event_loop()
-    count = await loop.run_in_executor(None, _db_info_sync, document_id)
+    count = await loop.run_in_executor(None, _db_info_sync, document_id, user_id)
 
     if count == 0:
         raise VectorStoreNotFoundError(document_id)

@@ -22,9 +22,25 @@ from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 
 from app.main import app
+from app.core.auth import get_current_user
 from app.services.mcp_client import WebResult
 from app.services.retrieval_service import RetrievedChunk
 
+
+# ---------------------------------------------------------------------------
+# Auth override — bypass JWT verification for routing tests
+# ---------------------------------------------------------------------------
+
+TEST_USER_ID = "test-user-aaaaaaaa-1111-aaaa-1111-aaaaaaaaaaaa"
+
+
+def _override_get_current_user():
+    """Stub dependency: returns a fixed test user_id without verifying any JWT."""
+    return TEST_USER_ID
+
+
+# Apply the override for all tests in this module
+app.dependency_overrides[get_current_user] = _override_get_current_user
 
 # ---------------------------------------------------------------------------
 # Fixtures

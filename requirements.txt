@@ -13,7 +13,6 @@ pymupdf==1.28.0
 
 # --- Embeddings & LLM routing ---
 litellm==1.57.4
-numpy==1.26.4
 
 # --- Vector store (pgvector via psycopg) ---
 psycopg[binary]
@@ -34,6 +33,11 @@ langchain-mistralai
 
 # --- MCP (Model Context Protocol) ---
 mcp>=1.2.0
+
+# --- Authentication / JWT verification ---
+# PyJWT with cryptography backend supports both RS256 (JWKS/production Supabase)
+# and HS256 (static secret / local Supabase emulator).
+pyjwt[crypto]>=2.9.0
 
 # --- Testing ---
 pytest>=8.0.0
