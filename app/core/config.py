@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     # CORS — comma-separated list of allowed frontend origins.
     # Set ALLOWED_ORIGINS in your deployment env to your Vercel URL.
     # Example: "https://studyforge.vercel.app,http://localhost:3000"
-    allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000,https://study-buddy2-frontend.vercel.app/"
 
     # Supabase — Storage REST API (used by supabase-py for PDF blob storage)
     supabase_url: str = ""
